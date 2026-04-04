@@ -9,7 +9,6 @@ const CONFIG = {
   },
   checkIntervalMs: 1 * 60 * 1000,
   delayThresholdMin: 60,
-  stopTime: new Date('2026-04-05T20:55:00+02:00'),
   lounge: {
     url: 'https://wingscard.smartdelay.com/wingscard/validation/validate-eligibility',
     cardPrefix: '524347',
@@ -353,21 +352,19 @@ async function checkFlights() {
   });
 
   try {
+    // 4 Nisan ucuslari
     await page.goto('https://www.gva.ch/en/Site/Passagers/Vols/Informations/Departs', {
       waitUntil: 'networkidle',
       timeout: 60000
     });
     await page.waitForTimeout(4000);
 
-    // "Show more" / "Plus de vols" butonuna birden fazla tikla
-    for (let i = 0; i < 10; i++) {
-      try {
-        const btn = await page.$('button:has-text("more"), button:has-text("plus"), button:has-text("More"), [class*="load-more"], [class*="show-more"]');
-        if (!btn) break;
-        await btn.click();
-        await page.waitForTimeout(2000);
-      } catch (_) { break; }
-    }
+    // 5 Nisan ucuslari
+    await page.goto('https://www.gva.ch/en/Site/Passagers/Vols/Informations/Departs?date=639109440000000000', {
+      waitUntil: 'networkidle',
+      timeout: 60000
+    });
+    await page.waitForTimeout(4000);
 
     await page.waitForTimeout(1000);
     console.log(`  ${allFlights.length} ucus incelendi`);
@@ -455,22 +452,13 @@ async function checkFlights() {
 async function main() {
   const now = new Date();
   console.log(`Baslatildi: ${now.toLocaleString()}`);
-  console.log(`Durdurulacak: ${CONFIG.stopTime.toLocaleString()}`);
-  console.log(`Kontrol araligi: 1 dakika\n`);
-
-  if (now >= CONFIG.stopTime) {
-    console.log('Izleme suresi dolmus.');
-    return;
-  }
+  console.log(`Izleme penceresi: 4 Nisan 18:55 - 5 Nisan 20:55`);
+  console.log(`Kontrol araligi: 1 dakika`);
+  console.log(`Durdurmak icin: Ctrl+C\n`);
 
   await checkFlights();
 
-  const interval = setInterval(async () => {
-    if (new Date() >= CONFIG.stopTime) {
-      console.log('\nIzleme tamamlandi.');
-      clearInterval(interval);
-      return;
-    }
+  setInterval(async () => {
     await checkFlights();
   }, CONFIG.checkIntervalMs);
 }
