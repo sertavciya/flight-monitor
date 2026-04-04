@@ -367,65 +367,85 @@ async function checkFlights() {
     await page.waitForTimeout(4000);
 
     await page.waitForTimeout(1000);
-    console.log(`  ${allFlights.length} ucus incelendi`);
+    console.log(`  GVA: ${allFlights.length} ucus`);
 
     const delayed = [];
     const windowStart = new Date('2026-04-04T17:55:00+02:00');
     const windowEnd   = new Date('2026-04-05T20:55:00+02:00');
 
-    let windowCount = 0;
-
-    for (const f of allFlights) {
-      // GVA alan adlari: DepartureScheduledTime, DepartureScheduledDate, DepartureExpectedTime, DepartureExpectedDate, Delay, Status
-      const status = (f.Status || f.status || '').toLowerCase();
-      if (status.includes('cancel')) continue;
-
-      // Tarih "04.04.2026" (GG.AA.YYYY), saat "18:55" formatinda geliyor
-      function gvaToIso(dateStr, timeStr) {
-        if (!dateStr || !timeStr) return null;
-        const p = dateStr.split('.');
-        if (p.length !== 3) return null;
-        return `${p[2]}-${p[1]}-${p[0]}T${timeStr}:00+02:00`;
-      }
-
-      const scheduled = parseIso(gvaToIso(f.DepartureScheduledDate, f.DepartureScheduledTime));
-      const expected  = parseIso(gvaToIso(
-        f.DepartureExpectedDate  || f.DepartureScheduledDate,
-        f.DepartureExpectedTime  || f.DepartureScheduledTime
-      ));
-
-      if (!scheduled || !expected) continue;
-      if (scheduled < windowStart || scheduled > windowEnd) continue;
-
-      windowCount++;
-
-      // Gecikme hesapla - Delay alani her zaman 0 geldiginden expected-scheduled kullan
-      const delayMin = Math.round((expected - scheduled) / 60000);
-
-      if (delayMin >= CONFIG.delayThresholdMin) {
-        const flightNo = (f.Name || f.FlightNumber || f.flightNumber || f.flight_number || '?').replace(/\s+/g, '');
-        const dest = f.Destination || f.destination || f.ArrivalAirport || f.arrivalAirport || f.arr_airport_name || '?';
-        const key = `${flightNo}-${scheduled.toISOString()}`;
-        if (!alreadyNotified.has(key)) {
-          const dd   = String(scheduled.getDate()).padStart(2, '0');
-          const mm   = String(scheduled.getMonth() + 1).padStart(2, '0');
-          const yyyy = scheduled.getFullYear();
-
-          delayed.push({
-            flightNo:      flightNo,
-            destination:   dest,
-            scheduled:     scheduled.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-            expected:      expected.toLocaleTimeString('tr-TR',  { hour: '2-digit', minute: '2-digit' }),
-            delayMin,
-            flightDate:    `${dd}.${mm}.${yyyy}`,
-            flightDateISO: `${yyyy}-${mm}-${dd}`
-          });
-          alreadyNotified.add(key);
-        }
-      }
+    function gvaToIso(dateStr, timeStr) {
+      if (!dateStr || !timeStr) return null;
+      const p = dateStr.split('.');
+      if (p.length !== 3) return null;
+      return `${p[2]}-${p[1]}-${p[0]}T${timeStr}:00+02:00`;
     }
 
-    console.log(`  Penceredeki ucus sayisi (${windowStart.toLocaleTimeString('tr-TR', {hour:'2-digit',minute:'2-digit'})} - ${windowEnd.toLocaleTimeString('tr-TR', {hour:'2-digit',minute:'2-digit'})}): ${windowCount}`);
+    function addDelayed(flightNo, dest, scheduled, expected) {
+      if (!flightNo || !scheduled || !expected) return;
+      if (scheduled < windowStart || scheduled > windowEnd) return;
+      const delayMin = Math.round((expected - scheduled) / 60000);
+      if (delayMin < CONFIG.delayThresholdMin) return;
+      const key = `${flightNo}-${scheduled.toISOString()}`;
+      if (alreadyNotified.has(key)) return;
+      const dd   = String(scheduled.getDate()).padStart(2, '0');
+      const mm   = String(scheduled.getMonth() + 1).padStart(2, '0');
+      const yyyy = scheduled.getFullYear();
+      delayed.push({
+        flightNo, destination: dest,
+        scheduled: scheduled.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+        expected:  expected.toLocaleTimeString('tr-TR',  { hour: '2-digit', minute: '2-digit' }),
+        delayMin,
+        flightDate:    `${dd}.${mm}.${yyyy}`,
+        flightDateISO: `${yyyy}-${mm}-${dd}`
+      });
+      alreadyNotified.add(key);
+    }
+
+    // GVA kaynaği
+    for (const f of allFlights) {
+      const status = (f.Status || '').toLowerCase();
+      if (status.includes('cancel')) continue;
+      const scheduled = parseIso(gvaToIso(f.DepartureScheduledDate, f.DepartureScheduledTime));
+      const expected  = parseIso(gvaToIso(
+        f.DepartureExpectedDate || f.DepartureScheduledDate,
+        f.DepartureExpectedTime || f.DepartureScheduledTime
+      ));
+      const flightNo = (f.Name || '?').replace(/\s+/g, '');
+      addDelayed(flightNo, f.Destination || '?', scheduled, expected);
+    }
+
+    // FR24 kaynaği (gercek zamanli, API key gerektirmez)
+    try {
+      const fr24Page = await browser.newPage();
+      let fr24Flights = [];
+
+      const fr24RespPromise = fr24Page.waitForResponse(
+        resp => resp.url().includes('/api/v1/airports/1277/departures'),
+        { timeout: 40000 }
+      );
+
+      fr24Page.goto('https://www.flightradar24.com/airport/gva/departures', {
+        waitUntil: 'commit', timeout: 40000
+      }).catch(() => {});
+
+      const fr24Resp = await fr24RespPromise;
+      const fr24Json = JSON.parse(await fr24Resp.text());
+      fr24Flights = fr24Json.data || [];
+      await fr24Page.close();
+
+      console.log(`  FR24: ${fr24Flights.length} ucus`);
+
+      for (const f of fr24Flights) {
+        const status = (f.status?.name || '').toLowerCase();
+        if (status.includes('cancel')) continue;
+        const scheduled = f.scheduledTime ? new Date(f.scheduledTime * 1000) : null;
+        const expected  = f.estimatedTime ? new Date(f.estimatedTime * 1000) : scheduled;
+        const flightNo  = (f.flight?.number || '?').replace(/\s+/g, '');
+        addDelayed(flightNo, f.destination || '?', scheduled, expected);
+      }
+    } catch (e) {
+      console.log('  FR24 hatasi:', e.message);
+    }
 
     if (delayed.length > 0) {
       console.log(`  ${delayed.length} gecikmeli ucus bulundu.`);
