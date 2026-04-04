@@ -342,6 +342,10 @@ async function checkFlights() {
         // Ilk cevapta alan adlarini log'a yaz (debug icin)
         if (allFlights.length > 0 && allFlights.length <= batch.length) {
           console.log('  [DEBUG] Ornek ucus alanlari:', Object.keys(allFlights[0]).join(', '));
+          // Ilk 3 ucusun tarih/saat degerlerini goster
+          allFlights.slice(0, 3).forEach((f, i) => {
+            console.log(`  [DEBUG] Ucus ${i}: SchedDate=${f.DepartureScheduledDate} SchedTime=${f.DepartureScheduledTime} ExpDate=${f.DepartureExpectedDate} ExpTime=${f.DepartureExpectedTime} Delay=${f.Delay} Name=${f.Name}`);
+          });
         }
       } catch (_) {}
       await route.fulfill({ response });
@@ -372,26 +376,39 @@ async function checkFlights() {
     const windowStart = new Date('2026-04-04T18:55:00+02:00');
     const windowEnd   = new Date('2026-04-05T20:55:00+02:00');
 
+    let windowCount = 0;
+
     for (const f of allFlights) {
-      // GVA alan adlari (ilk calistirmada DEBUG logundan ogrenilecek)
-      const status = (f.Status || f.status || f.FlightStatus || f.flight_status || '').toLowerCase();
+      // GVA alan adlari: DepartureScheduledTime, DepartureScheduledDate, DepartureExpectedTime, DepartureExpectedDate, Delay, Status
+      const status = (f.Status || f.status || '').toLowerCase();
       if (status.includes('cancel')) continue;
 
-      const scheduled = parseIso(
-        f.ScheduledDeparture || f.scheduledDeparture || f.STD || f.std ||
-        f.dep_scheduled_time || f.DepartureTime || f.departureTime
-      );
-      const expected = parseIso(
-        f.EstimatedDeparture || f.estimatedDeparture || f.ETD || f.etd ||
-        f.dep_estimated_time || f.ActualDeparture || f.actualDeparture
-      );
+      // Tarih "04.04.2026" (GG.AA.YYYY), saat "18:55" formatinda geliyor
+      function gvaToIso(dateStr, timeStr) {
+        if (!dateStr || !timeStr) return null;
+        const p = dateStr.split('.');
+        if (p.length !== 3) return null;
+        return `${p[2]}-${p[1]}-${p[0]}T${timeStr}:00+02:00`;
+      }
+
+      const scheduled = parseIso(gvaToIso(f.DepartureScheduledDate, f.DepartureScheduledTime));
+      const expected  = parseIso(gvaToIso(
+        f.DepartureExpectedDate  || f.DepartureScheduledDate,
+        f.DepartureExpectedTime  || f.DepartureScheduledTime
+      ));
+
       if (!scheduled || !expected) continue;
       if (scheduled < windowStart || scheduled > windowEnd) continue;
 
-      const delayMin = Math.round((expected - scheduled) / 60000);
+      windowCount++;
+
+      // Gecikme hesapla - API'nin kendi Delay alani varsa onu da kullan
+      const delayMin = f.Delay != null
+        ? Math.round(Number(f.Delay))
+        : Math.round((expected - scheduled) / 60000);
 
       if (delayMin >= CONFIG.delayThresholdMin) {
-        const flightNo = (f.FlightNumber || f.flightNumber || f.flight_number || f.NumVol || '?').replace(/\s+/g, '');
+        const flightNo = (f.Name || f.FlightNumber || f.flightNumber || f.flight_number || '?').replace(/\s+/g, '');
         const dest = f.Destination || f.destination || f.ArrivalAirport || f.arrivalAirport || f.arr_airport_name || '?';
         const key = `${flightNo}-${scheduled.toISOString()}`;
         if (!alreadyNotified.has(key)) {
@@ -412,6 +429,8 @@ async function checkFlights() {
         }
       }
     }
+
+    console.log(`  Penceredeki ucus sayisi (${windowStart.toLocaleTimeString('tr-TR', {hour:'2-digit',minute:'2-digit'})} - ${windowEnd.toLocaleTimeString('tr-TR', {hour:'2-digit',minute:'2-digit'})}): ${windowCount}`);
 
     if (delayed.length > 0) {
       console.log(`  ${delayed.length} gecikmeli ucus bulundu.`);
