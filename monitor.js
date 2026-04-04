@@ -370,7 +370,7 @@ async function checkFlights() {
     console.log(`  ${allFlights.length} ucus incelendi`);
 
     const delayed = [];
-    const windowStart = new Date('2026-04-04T18:55:00+02:00');
+    const windowStart = new Date('2026-04-04T17:55:00+02:00');
     const windowEnd   = new Date('2026-04-05T20:55:00+02:00');
 
     let windowCount = 0;
@@ -399,10 +399,8 @@ async function checkFlights() {
 
       windowCount++;
 
-      // Gecikme hesapla - API'nin kendi Delay alani varsa onu da kullan
-      const delayMin = f.Delay != null
-        ? Math.round(Number(f.Delay))
-        : Math.round((expected - scheduled) / 60000);
+      // Gecikme hesapla - Delay alani her zaman 0 geldiginden expected-scheduled kullan
+      const delayMin = Math.round((expected - scheduled) / 60000);
 
       if (delayMin >= CONFIG.delayThresholdMin) {
         const flightNo = (f.Name || f.FlightNumber || f.flightNumber || f.flight_number || '?').replace(/\s+/g, '');
@@ -452,7 +450,7 @@ async function checkFlights() {
 async function main() {
   const now = new Date();
   console.log(`Baslatildi: ${now.toLocaleString()}`);
-  console.log(`Izleme penceresi: 4 Nisan 18:55 - 5 Nisan 20:55`);
+  console.log(`Izleme penceresi: 4 Nisan 17:55 - 5 Nisan 20:55`);
   console.log(`Kontrol araligi: 1 dakika`);
   console.log(`Durdurmak icin: Ctrl+C\n`);
 
