@@ -366,6 +366,17 @@ async function checkFlights() {
     const windowStart = new Date('2026-04-04T17:55:00+02:00');
     const windowEnd   = new Date('2026-04-05T20:55:00+02:00');
 
+    // Ucus numarasini normalize et: EJU/EZS/U2 -> EZY (EasyJet), vs.
+    function normalizeFlightNo(no) {
+      if (!no) return '?';
+      no = no.replace(/\s+/g, '');
+      if (no.startsWith('EJU') || no.startsWith('EZS')) return 'EZY' + no.slice(3);
+      if (no.startsWith('U2'))  return 'EZY' + no.slice(2);
+      if (no.startsWith('FR'))  return 'RYR' + no.slice(2);
+      if (no.startsWith('W6'))  return 'WZZ' + no.slice(2);
+      return no;
+    }
+
     function gvaToIso(dateStr, timeStr) {
       if (!dateStr || !timeStr) return null;
       const p = dateStr.split('.');
@@ -403,9 +414,19 @@ async function checkFlights() {
         f.DepartureExpectedDate || f.DepartureScheduledDate,
         f.DepartureExpectedTime || f.DepartureScheduledTime
       ));
-      const flightNo = (f.Name || '?').replace(/\s+/g, '');
+      const flightNo = normalizeFlightNo(f.Name || '?');
       addDelayed(flightNo, f.Destination || '?', scheduled, expected);
     }
+
+    // AirLabs verisini once cek (FR24 ve AirLabs bloklari icin ortak kullanim)
+    let alFlightsForRef = [];
+    try {
+      const alRef = await page.evaluate(async (key) => {
+        const r = await fetch(`https://airlabs.co/api/v9/schedules?dep_iata=GVA&api_key=${key}`);
+        return r.text();
+      }, 'ab83db75-4f1e-45ad-8a57-586dd15c1651');
+      alFlightsForRef = (JSON.parse(alRef)).response || [];
+    } catch(_) {}
 
     // FR24 kaynaği (gercek zamanli, API key gerektirmez)
     try {
@@ -433,21 +454,26 @@ async function checkFlights() {
         if (status.includes('cancel')) continue;
         const scheduled = f.scheduledTime ? new Date(f.scheduledTime * 1000) : null;
         const expected  = f.estimatedTime ? new Date(f.estimatedTime * 1000) : scheduled;
-        const flightNo  = (f.flight?.number || '?').replace(/\s+/g, '');
+
+        // FR24 IATA numarasini AirLabs ICAO numarasiyla eslestir (scheduled time ±3 dk)
+        const alMatch = alFlightsForRef.find(al => {
+          const alSched = parseIso((al.dep_time || '').replace(' ', 'T') + ':00+02:00');
+          return alSched && scheduled && Math.abs(alSched - scheduled) <= 3 * 60000
+            && (al.flight_iata || '').replace(/\s+/g,'') === (f.flight?.number || '').replace(/\s+/g,'');
+        });
+        const flightNo = alMatch
+          ? normalizeFlightNo(alMatch.flight_icao || alMatch.flight_iata || f.flight?.number || '?')
+          : normalizeFlightNo(f.flight?.number || '?');
+
         addDelayed(flightNo, f.destination || '?', scheduled, expected);
       }
     } catch (e) {
       console.log('  FR24 hatasi:', e.message);
     }
 
-    // AirLabs kaynaği (3. kaynak, delayed alani dakika cinsinden)
+    // AirLabs kaynaği (3. kaynak - FR24 bloğunda çekildi, tekrar kullan)
     try {
-      const alResp = await page.evaluate(async (key) => {
-        const r = await fetch(`https://airlabs.co/api/v9/schedules?dep_iata=GVA&api_key=${key}`);
-        return r.text();
-      }, 'ab83db75-4f1e-45ad-8a57-586dd15c1651');
-      const alJson = JSON.parse(alResp);
-      const alFlights = alJson.response || [];
+      const alFlights = alFlightsForRef;
       console.log(`  AirLabs: ${alFlights.length} ucus`);
 
       for (const f of alFlights) {
@@ -459,7 +485,7 @@ async function checkFlights() {
         if (!scheduled || delayMin < CONFIG.delayThresholdMin) continue;
         if (scheduled < windowStart || scheduled > windowEnd) continue;
         const expected = new Date(scheduled.getTime() + delayMin * 60000);
-        const flightNo = (f.flight_iata || f.flight_icao || '?').replace(/\s+/g, '');
+        const flightNo = normalizeFlightNo(f.flight_icao || f.flight_iata || '?');
         addDelayed(flightNo, f.arr_iata || '?', scheduled, expected);
       }
     } catch (e) {
