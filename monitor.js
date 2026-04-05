@@ -352,13 +352,6 @@ async function checkFlights() {
   });
 
   try {
-    // 4 Nisan ucuslari
-    await page.goto('https://www.gva.ch/en/Site/Passagers/Vols/Informations/Departs', {
-      waitUntil: 'networkidle',
-      timeout: 60000
-    });
-    await page.waitForTimeout(4000);
-
     // 5 Nisan ucuslari
     await page.goto('https://www.gva.ch/en/Site/Passagers/Vols/Informations/Departs?date=639109440000000000', {
       waitUntil: 'networkidle',
@@ -445,6 +438,32 @@ async function checkFlights() {
       }
     } catch (e) {
       console.log('  FR24 hatasi:', e.message);
+    }
+
+    // AirLabs kaynaği (3. kaynak, delayed alani dakika cinsinden)
+    try {
+      const alResp = await page.evaluate(async (key) => {
+        const r = await fetch(`https://airlabs.co/api/v9/schedules?dep_iata=GVA&api_key=${key}`);
+        return r.text();
+      }, 'ab83db75-4f1e-45ad-8a57-586dd15c1651');
+      const alJson = JSON.parse(alResp);
+      const alFlights = alJson.response || [];
+      console.log(`  AirLabs: ${alFlights.length} ucus`);
+
+      for (const f of alFlights) {
+        if ((f.status || '').toLowerCase().includes('cancel')) continue;
+        const depTime = f.dep_time || f.dep_estimated || '';
+        if (!depTime) continue;
+        const scheduled = parseIso(depTime.replace(' ', 'T') + ':00+02:00');
+        const delayMin  = Number(f.delayed || 0);
+        if (!scheduled || delayMin < CONFIG.delayThresholdMin) continue;
+        if (scheduled < windowStart || scheduled > windowEnd) continue;
+        const expected = new Date(scheduled.getTime() + delayMin * 60000);
+        const flightNo = (f.flight_iata || f.flight_icao || '?').replace(/\s+/g, '');
+        addDelayed(flightNo, f.arr_iata || '?', scheduled, expected);
+      }
+    } catch (e) {
+      console.log('  AirLabs hatasi:', e.message);
     }
 
     if (delayed.length > 0) {
